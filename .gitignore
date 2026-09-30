@@ -1,0 +1,7 @@
+node_modules/
+.env
+jobs/
+public/
+*.mp4
+*.mp3
+*.png
