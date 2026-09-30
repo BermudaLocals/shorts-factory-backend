@@ -1,6 +1,6 @@
-﻿FROM node:20-bullseye
+﻿FROM node:20-alpine
 
-RUN apt-get update && apt-get install -y ffmpeg python3 make g++ && rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache ffmpeg python3 make g++
 
 WORKDIR /app
 
