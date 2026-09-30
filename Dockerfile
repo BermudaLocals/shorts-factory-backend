@@ -5,7 +5,7 @@ RUN apt-get update && apt-get install -y ffmpeg python3 make g++ && rm -rf /var/
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm ci --only=production
+RUN npm install --only=production
 
 COPY . .
 
