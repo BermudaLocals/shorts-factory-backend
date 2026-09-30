@@ -1,7 +1,7 @@
-{
+﻿{
   "name": "shorts-factory-backend",
   "version": "1.0.0",
-  "description": "Dollar Double Empire — AI YouTube Shorts Pipeline",
+  "description": "Dollar Double Empire â€” AI YouTube Shorts Pipeline",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -16,7 +16,7 @@
     "uuid": "^9.0.0",
     "fluent-ffmpeg": "^2.1.2",
     "node-fetch": "^2.7.0",
-    "sharp": "^0.33.1",
+    
     "fs-extra": "^11.2.0"
   },
   "devDependencies": {
