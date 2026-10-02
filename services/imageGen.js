@@ -1,82 +1,43 @@
 const axios = require('axios');
 const fs = require('fs-extra');
 const path = require('path');
-
 const REPLICATE_API = 'https://api.replicate.com/v1';
-
-// Flux Schnell — fast, cheap, great quality for kids content
 const IMAGE_MODEL = 'black-forest-labs/flux-schnell';
 
 async function generateImage(sceneVisual, sceneNum, jobDir) {
-  console.log(`[IMG] Generating scene ${sceneNum}: ${sceneVisual.slice(0, 60)}...`);
-
-  // Enhance prompt for kids/YouTube Shorts style
-  const enhancedPrompt = `${sceneVisual}, vibrant colors, cartoon style, kid-friendly, bright and cheerful, Pixar-inspired, high quality, 9:16 vertical format`;
-
-  // Start prediction
-  const startRes = await axios.post(
-    `${REPLICATE_API}/models/${IMAGE_MODEL}/predictions`,
-    {
-      input: {
-        prompt: enhancedPrompt,
-        aspect_ratio: '9:16',
-        output_format: 'png',
-        output_quality: 90,
-        num_inference_steps: 4
-      }
-    },
-    {
-      headers: {
-        Authorization: `Token ${process.env.REPLICATE_API_TOKEN}`,
-        'Content-Type': 'application/json'
-      }
-    }
-  );
-
-  const predictionId = startRes.data.id;
-  console.log(`[IMG] Prediction started: ${predictionId}`);
-
-  // Poll until complete
-  const imageUrl = await pollReplicate(predictionId);
-  console.log(`[IMG] Scene ${sceneNum} complete: ${imageUrl}`);
-
-  // Download image to disk
+  console.log(`[IMG] Generating scene ${sceneNum}...`);
   const imgPath = path.join(jobDir, `scene_${String(sceneNum).padStart(2, '0')}.png`);
-  await downloadFile(imageUrl, imgPath);
-
-  return imgPath;
-}
-
-async function pollReplicate(predictionId, maxWait = 120000) {
-  const start = Date.now();
-  while (Date.now() - start < maxWait) {
-    await sleep(2000);
-    const res = await axios.get(
-      `${REPLICATE_API}/predictions/${predictionId}`,
-      { headers: { Authorization: `Token ${process.env.REPLICATE_API_TOKEN}` } }
-    );
-    const { status, output, error } = res.data;
-    if (status === 'succeeded') {
-      return Array.isArray(output) ? output[0] : output;
+  
+  try {
+    // Try FREE Pollinations first
+    const prompt = encodeURIComponent(`${sceneVisual}, cinematic lighting, high quality, professional`);
+    const url = `https://image.pollinations.ai/prompt/${prompt}?width=1024&height=1024&nologo=true&seed=${sceneNum}&t=${Date.now()}`;
+    const res = await axios.get(url, { responseType: 'arraybuffer', timeout: 30000, headers: { 'User-Agent': 'Mozilla/5.0' } });
+    await fs.outputFile(imgPath, res.data);
+    console.log(`[IMG] ✅ Scene ${sceneNum} via FREE Pollinations`);
+    return imgPath;
+  } catch (err) {
+    console.warn(`[IMG] ⚠️ Pollinations failed. Falling back to Replicate...`);
+    if (!process.env.REPLICATE_API_TOKEN) throw new Error("Pollinations failed and REPLICATE_API_TOKEN is missing.");
+    
+    // Fallback to Replicate
+    const startRes = await axios.post(`${REPLICATE_API}/models/${IMAGE_MODEL}/predictions`, {
+      input: { prompt: `${sceneVisual}, vibrant colors, high quality, 9:16 vertical`, aspect_ratio: '9:16', output_format: 'png', num_inference_steps: 4 }
+    }, { headers: { Authorization: `Token ${process.env.REPLICATE_API_TOKEN}`, 'Content-Type': 'application/json' } });
+    
+    const predictionId = startRes.data.id;
+    let imageUrl;
+    for (let i = 0; i < 60; i++) {
+      await new Promise(r => setTimeout(r, 2000));
+      const check = await axios.get(`${REPLICATE_API}/predictions/${predictionId}`, { headers: { Authorization: `Token ${process.env.REPLICATE_API_TOKEN}` } });
+      if (check.data.status === 'succeeded') { imageUrl = Array.isArray(check.data.output) ? check.data.output[0] : check.data.output; break; }
+      if (check.data.status === 'failed') throw new Error("Replicate failed");
     }
-    if (status === 'failed') {
-      throw new Error(`Replicate prediction failed: ${error}`);
-    }
-    console.log(`[IMG] Status: ${status}...`);
+    const fetch = require('node-fetch');
+    const dl = await fetch(imageUrl);
+    await fs.outputFile(imgPath, await dl.buffer());
+    console.log(`[IMG] ✅ Scene ${sceneNum} via Replicate Fallback`);
+    return imgPath;
   }
-  throw new Error('Replicate timed out after 2 minutes');
 }
-
-async function downloadFile(url, dest) {
-  const fetch = require('node-fetch');
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Failed to download: ${res.status}`);
-  const buffer = await res.buffer();
-  await fs.outputFile(dest, buffer);
-}
-
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
 module.exports = { generateImage };

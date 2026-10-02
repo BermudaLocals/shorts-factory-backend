@@ -5,68 +5,98 @@ const path = require('path');
 const OUTPUT_WIDTH = 1080;
 const OUTPUT_HEIGHT = 1920;
 
-async function assembleVideo(imagePaths, audioPaths, fullAudioPath, jobDir, jobId) {
-  console.log('[VIDEO] Starting assembly...');
-  const durations = await getAudioDurations(audioPaths);
+async function assembleVideo(scenesData, jobDir, jobId) {
+  console.log('[VIDEO] Starting hybrid assembly (Google Flow + Ken Burns)...');
+  const clipPaths = [];
+
+  for (let i = 0; i < scenesData.length; i++) {
+    const scene = scenesData[i];
+    const clipPath = path.join(jobDir, `clip_${String(i).padStart(2, '0')}.mp4`);
+
+    if (scene.type === 'ai_video' && scene.videoPath) {
+      console.log(`[VIDEO] Using pre-made Google Flow clip for scene ${i + 1}`);
+      await fs.copy(scene.videoPath, clipPath);
+    } else {
+      console.log(`[VIDEO] Generating FREE Ken Burns clip for scene ${i + 1}`);
+      await createKenBurnsClip(scene.imagePath, scene.audioPath, clipPath, scene.duration);
+    }
+
+    clipPaths.push(clipPath);
+  }
+
   const outputPath = path.join(jobDir, `${jobId}_final.mp4`);
-  await buildVideo(imagePaths, durations, fullAudioPath, outputPath, jobDir);
+  await concatenateClips(clipPaths, outputPath, jobDir);
+
   return outputPath;
 }
 
-async function getAudioDurations(audioPaths) {
-  const durations = [];
-  for (const ap of audioPaths) {
-    const dur = await getFileDuration(ap);
-    durations.push(Math.max(dur + 0.5, 2));
-  }
-  return durations;
-}
-
-function getFileDuration(filePath) {
-  return new Promise((resolve) => {
-    ffmpeg.ffprobe(filePath, (err, metadata) => {
-      if (err) return resolve(4);
-      resolve(metadata.format.duration || 4);
-    });
+function createKenBurnsClip(imagePath, audioPath, outputPath, duration = 10) {
+  return new Promise((resolve, reject) => {
+    ffmpeg()
+      .input(imagePath)
+      .inputOptions(['-loop 1', '-framerate 30'])
+      .input(audioPath)
+      .videoFilters([
+        {
+          filter: 'zoompan',
+          options: {
+            z: 'min(zoom+0.0004,1.5)',
+            x: 'iw/2-(iw/zoom/2)',
+            y: 'ih/2-(ih/zoom/2)',
+            d: '1',
+            s: `${OUTPUT_WIDTH}x${OUTPUT_HEIGHT}`,
+            fps: '30'
+          }
+        }
+      ])
+      .outputOptions([
+        '-pix_fmt yuv420p',
+        '-shortest',
+        '-c:v libx264',
+        '-preset fast',
+        '-c:a aac',
+        '-b:a 192k'
+      ])
+      .output(outputPath)
+      .on('end', () => resolve(outputPath))
+      .on('error', (err) => {
+        console.error('[VIDEO] Ken Burns Error:', err.message);
+        reject(err);
+      })
+      .run();
   });
 }
 
-async function buildVideo(imagePaths, durations, fullAudioPath, outputPath, jobDir) {
-  const listPath = path.join(jobDir, 'video_list.txt');
-  let content = '';
-  imagePaths.forEach((imgPath, i) => {
-    content += `file '${imgPath}'\nduration ${durations[i].toFixed(2)}\n`;
-  });
-  content += `file '${imagePaths[imagePaths.length - 1]}'\n`;
-  await fs.outputFile(listPath, content);
+async function concatenateClips(clipPaths, outputPath, jobDir) {
+  const listPath = path.join(jobDir, 'final_concat_list.txt');
+  const listContent = clipPaths.map(p => `file '${p}'`).join('\n');
+  await fs.outputFile(listPath, listContent);
 
   return new Promise((resolve, reject) => {
     ffmpeg()
       .input(listPath)
-      .inputOptions(['-f', 'concat', '-safe', '0'])
-      .input(fullAudioPath)
+      .inputOptions(['-f concat', '-safe 0'])
       .outputOptions([
-        '-vf', `scale=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT}:force_original_aspect_ratio=increase,crop=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT},setsar=1`,
-        '-c:v', 'libx264',
-        '-preset', 'fast',
-        '-crf', '23',
-        '-c:a', 'aac',
-        '-b:a', '192k',
-        '-shortest',
-        '-movflags', '+faststart',
-        '-pix_fmt', 'yuv420p',
-        '-r', '30'
+        '-c:v libx264', 
+        '-preset fast',
+        '-crf 23',
+        '-c:a aac',
+        '-b:a 192k',
+        '-movflags +faststart',
+        '-pix_fmt yuv420p',
+        '-r 30',
+        '-vf', `scale=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT}:force_original_aspect_ratio=increase,crop=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT},setsar=1`
       ])
       .output(outputPath)
-      .on('progress', p => { if (p.percent) console.log(`[VIDEO] ${Math.round(p.percent)}%`); })
+      .on('progress', p => { if (p.percent) console.log(`[VIDEO] Concat: ${Math.round(p.percent)}%`); })
       .on('end', () => resolve(outputPath))
-      .on('error', (err, stdout, stderr) => { console.error('[VIDEO]', err.message); reject(err); })
+      .on('error', (err) => reject(err))
       .run();
   });
 }
 
 async function buildVideoSimple(imagePaths, audioPaths, fullAudioPath, jobDir, jobId) {
-  return assembleVideo(imagePaths, audioPaths, fullAudioPath, jobDir, jobId);
+    throw new Error("Simple fallback not supported in hybrid mode.");
 }
 
 module.exports = { assembleVideo, buildVideoSimple };
